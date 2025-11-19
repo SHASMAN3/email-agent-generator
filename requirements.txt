@@ -1,0 +1,8 @@
+streamlit
+python-dotenv
+langgraph
+langchain-google-genai
+langchain-core
+# You'll need a way to post to LinkedIn. For simplicity, we'll use a placeholder
+# tool, but you'd typically use a library like 'linkedin-api' or a direct HTTP client.
+# requests # If you implement a real LinkedIn API client
