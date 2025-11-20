@@ -3,10 +3,13 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, AIMessage
 from typing import Dict, Any
 from langchain_core.messages.utils import get_buffer_string
-# CRITICAL IMPORT: Need to import the function/tool object directly for the forced execution path
-from src.agent.tools import tools, send_email 
 from src.agent.state import AgentState
-from src.core.llm import llm_with_tools
+from src.agent.tools import tools, send_email  # We keep tools/send_email imports for graph compilation
+# from src.core.llm import llm_with_tools # <--- REMOVED
+
+# --- Dynamic Configuration Bridge ---
+# This dictionary will be populated by app.py with the user's LLM and Tools
+AGENT_CONFIG = {"llm_with_tools": None, "tools": None}
 
 # --- Utility for Logging ---
 def log_step(name: str, status: str, details: str = "") -> Dict[str, Any]:
@@ -17,6 +20,10 @@ def log_step(name: str, status: str, details: str = "") -> Dict[str, Any]:
 def generate_draft(state: AgentState):
     """Generates the initial subject and body content based on the goal."""
     
+    # CRITICAL: Fetch the dynamic LLM
+    llm_with_tools = AGENT_CONFIG.get("llm_with_tools")
+    if not llm_with_tools: raise Exception("LLM not configured in AGENT_CONFIG. Check app.py setup.")
+
     system_prompt = (
         "You are a professional Email Drafting Agent. Write a concise, professional "
         "email subject and body based on the user's goal. "
@@ -60,6 +67,10 @@ def generate_draft(state: AgentState):
 def review_and_decide(state: AgentState):
     """LLM node to review the draft and decide whether to send or provide feedback."""
     
+    # CRITICAL: Fetch the dynamic LLM
+    llm_with_tools = AGENT_CONFIG.get("llm_with_tools")
+    if not llm_with_tools: raise Exception("LLM not configured in AGENT_CONFIG. Check app.py setup.")
+    
     # CRITICAL PROMPT UPDATE FOR SENDING 
     system_prompt = (
         "You are the Email Orchestrator. Review the draft for professionalism and completeness. "
@@ -94,6 +105,10 @@ def tool_executor(state: AgentState):
     Executes the send_email tool, handling both explicit tool calls and forced execution 
     by synthesizing the arguments from the state.
     """
+    # CRITICAL: Fetch the dynamic Tools list
+    dynamic_tools = AGENT_CONFIG.get("tools")
+    if not dynamic_tools: raise Exception("Tools not configured in AGENT_CONFIG. Check app.py setup.")
+
     tool_calls = state['messages'][-1].tool_calls if state['messages'] else None
     current_logs = state.get("logs", [])
     
@@ -103,15 +118,19 @@ def tool_executor(state: AgentState):
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
         
-        tool_to_run = next(t for t in tools if t.name == tool_name)
+        # Use the dynamic tools list
+        tool_to_run = next(t for t in dynamic_tools if t.name == tool_name)
         tool_result = tool_to_run.invoke(tool_args)
         
     # --- Check 2: No Explicit Tool Call (Forced Execution) ---
     else:
         # Synthesize arguments directly from the state for the forced execution path.
         try:
-            # 🚨 FINAL FIX: Call the tool using .invoke() and pass arguments as a dict 🚨
-            tool_result = send_email.invoke({
+            # Find the specific send_email tool object from the dynamic list
+            send_email_tool = next(t for t in dynamic_tools if t.name == "send_email")
+            
+            # FINAL FIX: Call the tool using .invoke() and pass arguments as a dict 
+            tool_result = send_email_tool.invoke({
                 "recipient": state['recipient'],
                 "subject": state['subject'],
                 "body": state['body']
@@ -123,7 +142,7 @@ def tool_executor(state: AgentState):
             return {"status": tool_result, "logs": current_logs, "messages": []}
 
         except Exception as e:
-            # Handle potential exceptions during manual call (this is likely an SMTP credential error now)
+            # Handle potential exceptions during manual call 
             log = log_step("Tool_Executor", "Forced_Error", f"Manual tool execution failed. Check .env: {str(e)}")
             current_logs.append(log)
             # Return error result and exit node
@@ -150,12 +169,15 @@ def route_next_step(state: AgentState):
 
     # Fail-Safe: If no explicit tool call or rejection was made, we force tool execution.
     else:
-        return "tool_executor" # 🛑 THIS FORCES THE SEND FOR GOOD DRAFTS
+        return "tool_executor" 
 
 # --- Build the Graph ---
 
 def build_email_agent():
-    """Compiles and returns the LangGraph agent."""
+    """
+    Compiles and returns the LangGraph agent. 
+    It relies on AGENT_CONFIG being set by app.py before invocation.
+    """
     workflow = StateGraph(AgentState)
 
     workflow.add_node("draft_creator", generate_draft)
@@ -179,5 +201,5 @@ def build_email_agent():
     
     return workflow.compile()
 
-# Initialize the agent
+# Initialize the agent (Compiler will use the imports from the top of the file)
 email_agent = build_email_agent()
